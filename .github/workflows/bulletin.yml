@@ -1,0 +1,53 @@
+name: Publish visitor bulletin
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  issues:
+    types: [opened, edited, deleted, transferred, closed, reopened]
+permissions:
+  contents: read
+  issues: read
+  pages: write
+  id-token: write
+concurrency:
+  group: bulletin-pages
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Set up Pages
+        uses: actions/configure-pages@v5
+      - name: Read public notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p bulletin
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=all&sort=created&direction=desc&per_page=100" --slurp > "$RUNNER_TEMP/issues.json"
+          python - <<'PY'
+          import json, os, pathlib
+          source = pathlib.Path(os.environ["RUNNER_TEMP"], "issues.json")
+          notes = []
+          for page in json.loads(source.read_text()):
+              for issue in page:
+                  if "pull_request" in issue:
+                      continue
+                  notes.append({
+                      "number": issue["number"], "state": issue["state"],
+                      "title": issue["title"][:240], "body": (issue["body"] or "")[:241],
+                      "created_at": issue["created_at"], "user": {"login": issue["user"]["login"]},
+                  })
+          for start in range(0, max(1, len(notes)), 24):
+              data = {"notes": notes[start:start + 24], "hasMore": start + 24 < len(notes)}
+              pathlib.Path("bulletin", f"notes-{start // 24 + 1}.json").write_text(json.dumps(data))
+          PY
+          echo '<!doctype html><html lang="en"><meta charset="utf-8"><title>Visitor bulletin</title><a href="https://deceptrax123.github.io/iu-room/notes/">Open the sticky-note board</a></html>' > bulletin/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: bulletin
+      - id: deployment
+        uses: actions/deploy-pages@v4
